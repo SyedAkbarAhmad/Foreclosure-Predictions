@@ -1,0 +1,186 @@
+setwd("C:\\Users\\syahmad\\Documents\\GitHub")
+
+
+#install.packages("data.table")
+library(data.table)
+library(sqldf)
+library(dplyr)
+library(zoo)
+library(ggplot2)
+options(dplyr.width = Inf)
+
+
+Performance <- fread("Performance_2009Q4.txt", header=FALSE, sep="|",integer64="character")
+Acquisition <- fread("Acquisition_2009Q4.txt", header=FALSE, sep="|",integer64="character")
+
+nrow(Acquisition)
+ 
+?rbind
+
+colnames(Performance) <- c("LOAN IDENTIFIER",
+                        "MONTHLY REPORTING PERIOD",
+                        "SERVICER NAME",
+                        "CURRENT INTEREST RATE",
+                        "CURRENT ACTUAL UNPAID PRINCIPAL BALANCE (UPB)",
+                        "LOAN AGE",
+                        "REMAINING MONTHS TO LEGAL MATURITY",
+                        "ADJUSTED REMAINING MONTHS TO MATURITY",
+                        "MATURITY DATE",
+                        "METROPOLITAN STATISTICAL AREA (MSA)",
+                        "CURRENT LOAN DELINQUENCY STATUS",
+                        "MODIFICATION FLAG",
+                        "ZERO BALANCE CODE",
+                        "ZERO BALANCE EFFECTIVE DATE",
+                        "LAST PAID INSTALLMENT DATE",
+                        "FORECLOSURE DATE",
+                        "DISPOSITION DATE",
+                        "FORECLOSURE COSTS",
+                        "PROPERTY PRESERVATION AND REPAIR COSTS",
+                        "ASSET RECOVERY COSTS",
+                        "MISCELLANEOUS HOLDING EXPENSES AND CREDITS",
+                        "ASSOCIATED TAXES FOR HOLDING PROPERTY",
+                        "NET SALE PROCEEDS",
+                        "CREDIT ENHANCEMENT PROCEEDS",
+                        "REPURCHASE MAKE WHOLE PROCEEDS",
+                        "OTHER FORECLOSURE PROCEEDS",
+                        "NON INTEREST BEARING UPB",
+                        "PRINCIPAL FORGIVENESS UPB")
+
+
+colnames(Acquisition) <- c("LOAN IDENTIFIER",
+                           "CHANNEL",
+                           "SELLER NAME",
+                           "ORIGINAL INTEREST RATE",
+                           "ORIGINAL UNPAID PRINCIPAL BALANCE (UPB)",
+                           "ORIGINAL LOAN TERM",
+                           "ORIGINATION DATE",
+                           "FIRST PAYMENT DATE",
+                           "ORIGINAL LOAN-TO-VALUE (LTV)",
+                           "ORIGINAL COMBINED LOAN-TO-VALUE (CLTV)",
+                           "NUMBER OF BORROWERS",
+                           "DEBT-TO-INCOME RATIO (DTI)",
+                           "BORROWER CREDIT SCORE",
+                           "FIRST-TIME HOME BUYER INDICATOR",
+                           "LOAN PURPOSE",
+                           "PROPERTY TYPE",
+                           "NUMBER OF UNITS",
+                           "OCCUPANCY STATUS",
+                           "PROPERTY STATE",
+                           "ZIP (3-DIGIT)",
+                           "MORTGAGE INSURANCE PERCENTAGE",
+                           "PRODUCT TYPE",
+                           "CO-BORROWER CREDIT SCORE")
+
+
+
+
+head(Performance)
+head(Acquisition$LOAN_IDENTIFIER,20)
+
+names(Performance) <- gsub(" ", "_", names(Performance))
+names(Acquisition) <- gsub(" ", "_", names(Acquisition))
+
+names(Performance) <- gsub("\\(|\\)", "", names(Performance))
+names(Acquisition) <- gsub("\\(|\\)", "", names(Acquisition))
+
+ 
+glimpse(Performance)
+
+join1 <- inner_join(Acquisition, Performance, by = "LOAN_IDENTIFIER")
+
+?ctree
+
+Performance$MONTHLY_REPORTING_PERIOD <- as.Date(Performance$MONTHLY_REPORTING_PERIOD, "%m/%d/%Y")
+
+
+filter(Performance, FORECLOSURE_DATE != '')
+filter(Performance, LOAN_IDENTIFIER == '958616060218')
+filter(Performance, LOAN_IDENTIFIER == '100029809089')
+filter(Performance, ZERO_BALANCE_CODE == 1 & FORECLOSURE_DATE == "")
+
+Performance %>% filter(LOAN_IDENTIFIER == '114404222478') %>% group_by(LOAN_IDENTIFIER) %>%
+             summarise(max_int_rate = max(CURRENT_INTEREST_RATE))
+ 
+
+
+
+moving_balance <- mutate(Performance, previous_del_status = lag(CURRENT_LOAN_DELINQUENCY_STATUS), moving_balance = lag(CURRENT_ACTUAL_UNPAID_PRINCIPAL_BALANCE_UPB) - CURRENT_ACTUAL_UNPAID_PRINCIPAL_BALANCE_UPB , order_by = LOAN_IDENTIFIER
+                                                  ,MONTHLY_REPORTING_PERIOD)
+
+
+
+moving_balance <- mutate(moving_balance ,moving_balance_5 =  rollapplyr(moving_balance, 5, mean,partial = TRUE))
+ 
+moving_balance <- moving_balance %>%
+  group_by(LOAN_IDENTIFIER) %>%
+  mutate(rank = order(MONTHLY_REPORTING_PERIOD, decreasing=TRUE))
+
+
+mod1 <- moving_balance %>% filter(LOAN_IDENTIFIER == '988068883952') %>% group_by(LOAN_IDENTIFIER) %>%  
+summarise(max_int_rate = max(CURRENT_INTEREST_RATE), max_loan_age = max(LOAN_AGE), max_loan_del = max(CURRENT_LOAN_DELINQUENCY_STATUS)
+          )
+
+mod2 <- moving_balance %>% filter(LOAN_IDENTIFIER == '988068883952' & rank == 1) %>% group_by(LOAN_IDENTIFIER) %>%  
+  summarise(last_5_payments = max(moving_balance_5),payment_left = max(CURRENT_ACTUAL_UNPAID_PRINCIPAL_BALANCE_UPB),
+            FORECLOSURE = max(FORECLOSURE_DATE))
+
+mod2$FORECLOSURE <- ifelse(mod2$FORECLOSURE == "", 0,1)
+
+
+#filter(moving_balance, LOAN_IDENTIFIER == '114404222478') 
+mod3 <- filter(Acquisition, LOAN_IDENTIFIER == '988068883952')
+
+
+
+#?inner_join
+
+join1 <- inner_join(mod3, mod2, by = "LOAN_IDENTIFIER")
+join2 <- inner_join(join1, mod1, by = "LOAN_IDENTIFIER")
+
+join2$perc_paid <- join2$payment_left *100 /join2$ORIGINAL_UNPAID_PRINCIPAL_BALANCE_UPB 
+
+join2
+
+
+
+
+
+##### all table
+
+moving_balance$CURRENT_LOAN_DELINQUENCY_STATUS <- ifelse(moving_balance$CURRENT_LOAN_DELINQUENCY_STATUS == 'X', 0,
+                                                         moving_balance$CURRENT_LOAN_DELINQUENCY_STATUS)
+
+mod1 <- moving_balance %>% group_by(LOAN_IDENTIFIER) %>%  
+  summarise(max_int_rate = max(CURRENT_INTEREST_RATE), max_loan_age = max(LOAN_AGE))
+
+mod2 <- moving_balance %>% filter(rank == 1) %>% group_by(LOAN_IDENTIFIER) %>%  
+  summarise(last_5_payments = max(moving_balance_5),payment_left = max(CURRENT_ACTUAL_UNPAID_PRINCIPAL_BALANCE_UPB),
+            FORECLOSURE = max(FORECLOSURE_DATE),max_loan_del = max(CURRENT_LOAN_DELINQUENCY_STATUS))
+
+
+
+mod2$FORECLOSURE <- ifelse(mod2$FORECLOSURE == "", 0,1)
+
+
+
+#?inner_join
+
+join1 <- inner_join(Acquisition, mod2, by = "LOAN_IDENTIFIER")
+join2 <- inner_join(join1, mod1, by = "LOAN_IDENTIFIER")
+
+join2$perc_paid <- join2$payment_left *100 /join2$ORIGINAL_UNPAID_PRINCIPAL_BALANCE_UPB 
+
+glimpse(join2)
+
+filter(join2, FORECLOSURE == 0 && max_loan_del == "0" )
+
+sqldf("select * from join2 where FORECLOSURE = 0 and max_loan_del = '7'")
+
+#table(join2$FORECLOSURE) 45 F 197K not
+table(join2$max_loan_del,join2$FORECLOSURE)
+
+write.csv(join2, 'join2.csv')
+
+Performance %>% filter(CURRENT_LOAN_DELINQUENCY_STATUS == "X")
+
+hist(join2$last_5_payments, breaks = 100)
